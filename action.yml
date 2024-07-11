@@ -1,0 +1,120 @@
+name: 'Deploy to Server Action'
+description: 'Deploys files to a remote server using rsync and (optionally) executes remote commands'
+author: 'alleyinteractive'
+branding:
+  icon: 'upload-cloud'
+  color: 'blue'
+
+inputs:
+  server_user:
+    description: 'Username for the remote server'
+    required: true
+  server_ip:
+    description: 'IP address of the remote server'
+    required: true
+  source_directory:
+    description: 'Source directory to deploy'
+    required: false
+    default: '.'
+  destination_directory:
+    description: 'Destination directory on the remote server (relative to server_user home directory)'
+    required: true
+  exclude_list:
+    description: 'Comma-separated list of files and directories to exclude from sync'
+    required: false
+    default: '.git,node_modules,.env'
+  ssh_private_key:
+    description: 'SSH private key for authentication'
+    required: true
+  remote_commands:
+    description: 'Commands to execute on the remote server after deployment'
+    required: false
+    default: ''
+  delete_extraneous_files_from_destination:
+    description: 'Delete extraneous files from the destination directory on the remote server (rsync --delete)'
+    required: false
+    default: 'true'
+  dry_run:
+    description: 'Perform a dry run of the rsync command (rsync --dry-run)'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install rsync
+      run: sudo apt-get install -y rsync
+      shell: bash
+
+    - name: Set up SSH key
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ inputs.ssh_private_key }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan ${{ inputs.server_ip }} >> ~/.ssh/known_hosts
+      shell: bash
+
+    - name: Deploy to server
+      env:
+        EXCLUDE_LIST: ${{ inputs.exclude_list }}
+        SOURCE_DIR: ${{ inputs.source_directory }}
+        DEST_DIR: ${{ inputs.destination_directory }}
+        SERVER_USER: ${{ inputs.server_user }}
+        SERVER_IP: ${{ inputs.server_ip }}
+      run: |
+        # Ensure trailing slashes for directories
+        SOURCE_DIR="${SOURCE_DIR%/}/"
+        DEST_DIR="${DEST_DIR%/}/"
+
+        # Make a temporary directory to the rsync exclude list
+        EXCLUDE_DIR=$(mktemp -d)
+
+        IFS=',' read -ra EXCLUDES <<< "$EXCLUDE_LIST"
+        for EXCLUDE in "${EXCLUDES[@]}"; do
+          echo "$EXCLUDE" >> "$EXCLUDE_DIR/.rsync-exclude"
+        done
+
+        echo "Exclusions via $EXCLUDE_DIR/.rsync-exclude:"
+        cat "$EXCLUDE_DIR/.rsync-exclude"
+
+        # Set dry run option:
+        if [ "${{ inputs.dry_run }}" == "true" ]; then
+          DRY_RUN_OPTION="--dry-run"
+        else
+          DRY_RUN_OPTION=""
+        fi
+
+        if [ "${{ inputs.delete_extraneous_files_from_destination }}" == "true" ]; then
+          DELETE_OPTION="--delete"
+        else
+          DELETE_OPTION=""
+        fi
+
+        echo "Deploying from $SOURCE_DIR to $SERVER_USER@$SERVER_IP:$DEST_DIR"
+        rsync \
+          -avz \
+          $DRY_RUN_OPTION \
+          $DELETE_OPTION \
+          --exclude-from="$EXCLUDE_DIR/.rsync-exclude" \
+          "$SOURCE_DIR" "$SERVER_USER@$SERVER_IP:$DEST_DIR"
+
+      shell: bash
+
+    - name: Execute remote commands
+      if: inputs.remote_commands != ''
+      env:
+        REMOTE_COMMANDS: ${{ inputs.remote_commands }}
+        SERVER_USER: ${{ inputs.server_user }}
+        SERVER_IP: ${{ inputs.server_ip }}
+        DEST_DIR: ${{ inputs.destination_directory }}
+      run: |
+        # Ensure trailing slash for destination directory
+        DEST_DIR="${DEST_DIR%/}/"
+
+        # Execute commands on the remote server
+        ssh "$SERVER_USER@$SERVER_IP" << EOF
+          set -euxo pipefail
+          cd "$DEST_DIR"
+          eval "$REMOTE_COMMANDS"
+        EOF
+      shell: bash
