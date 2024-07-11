@@ -107,7 +107,15 @@ runs:
         SERVER_USER: ${{ inputs.server_user }}
         SERVER_IP: ${{ inputs.server_ip }}
         DEST_DIR: ${{ inputs.destination_directory }}
+        DRY_RUN: ${{ inputs.dry_run }}
       run: |
+        # If dry run, echo commands but do not run:
+        if [[ "$DRY_RUN" == "true" ]]; then
+          echo "WARNING: dry_run is enabled; not running commands:" 1>&2
+          echo "$REMOTE_COMMANDS" 1>&2
+          exit 0
+        fi
+
         # Ensure trailing slash for destination directory
         DEST_DIR="${DEST_DIR%/}/"
 
