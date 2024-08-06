@@ -119,10 +119,27 @@ runs:
         # Ensure trailing slash for destination directory
         DEST_DIR="${DEST_DIR%/}/"
 
-        # Execute commands on the remote server
-        ssh "$SERVER_USER@$SERVER_IP" << EOF
-          set -euxo pipefail
-          cd "$DEST_DIR"
-          eval "$REMOTE_COMMANDS"
+        # Create a specific script name using the GitHub commit SHA
+        SCRIPT_NAME="action-deploy-to-server-${GITHUB_SHA}.sh"
+        TEMP_SCRIPT="/tmp/${SCRIPT_NAME}"
+
+        # Write commands to the temporary script file
+        cat << EOF > "$TEMP_SCRIPT"
+        #!/bin/bash -euxo pipefail
+        cd "$DEST_DIR"
+        $REMOTE_COMMANDS
         EOF
+
+        # Make the script executable
+        chmod +x "$TEMP_SCRIPT"
+
+        # Copy the script to the remote server
+        scp "$TEMP_SCRIPT" "$SERVER_USER@$SERVER_IP:/tmp/${SCRIPT_NAME}"
+
+        # Execute the script on the remote server
+        ssh "$SERVER_USER@$SERVER_IP" "bash -ex /tmp/${SCRIPT_NAME}"
+
+        # Clean up: remove the temporary script locally and on the remote server
+        rm -f "$TEMP_SCRIPT"
+        ssh "$SERVER_USER@$SERVER_IP" "rm -f /tmp/${SCRIPT_NAME}"
       shell: bash
